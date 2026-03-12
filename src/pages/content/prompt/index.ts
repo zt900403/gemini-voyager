@@ -31,6 +31,7 @@ import type { TranslationKey } from '@/utils/translations';
 import { hasUnreadChangelog, openChangelog, showChangelogModalDirect } from '../changelog/index';
 import { createFolderStorageAdapter } from '../folder/storage/FolderStorageAdapter';
 import { getScrollHintState } from './scrollHint';
+import { applyPromptManagerTheme, watchPromptManagerTheme } from './theme';
 
 type PromptItem = {
   id: string;
@@ -480,6 +481,7 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
     panel.setAttribute('role', 'dialog');
     panel.setAttribute('aria-modal', 'false');
     document.body.appendChild(panel);
+    const stopWatchingPanelTheme = watchPromptManagerTheme(panel);
 
     // Build panel DOM
     const header = createEl('div', 'gv-pm-header');
@@ -962,6 +964,7 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
 
     function openPanel(): void {
       open = true;
+      applyPromptManagerTheme(panel);
       panel.classList.remove('gv-hidden');
       if (locked && savedPos) {
         panel.style.left = `${Math.round(savedPos.left)}px`;
@@ -1585,6 +1588,7 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
     return {
       destroy: () => {
         try {
+          stopWatchingPanelTheme();
           window.removeEventListener('resize', onWindowResize);
           window.removeEventListener('scroll', onReposition);
           window.removeEventListener('pointerdown', onWindowPointerDown, { capture: true });
