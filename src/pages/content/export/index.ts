@@ -1,6 +1,8 @@
 // Static imports to avoid CSP issues with dynamic imports in content scripts
+import { getCurrentProvider } from '@/core/providers';
 import { StorageKeys } from '@/core/types/common';
 import { isSafari } from '@/core/utils/browser';
+import { getProviderLocalStorageKey } from '@/core/utils/providerStorage';
 import { type AppLanguage, normalizeLanguage } from '@/utils/language';
 import { extractMessageDictionary } from '@/utils/localeMessages';
 import type { TranslationKey } from '@/utils/translations';
@@ -191,50 +193,31 @@ function getConversationRoot(userSelectors: string[]): HTMLElement {
 }
 
 function computeConversationId(): string {
+  const provider = getCurrentProvider();
   const raw = `${location.host}${location.pathname}${location.search}`;
-  return `gemini:${hashString(raw)}`;
+  return `${provider.id}:${hashString(raw)}`;
 }
 
 function getUserSelectors(): string[] {
+  const provider = getCurrentProvider();
+  const configuredKey = getProviderLocalStorageKey(provider.id, 'geminiTimelineUserTurnSelector');
+  const autoDetectedKey = getProviderLocalStorageKey(
+    provider.id,
+    'geminiTimelineUserTurnSelectorAuto',
+  );
   const configured = (() => {
     try {
-      return (
-        localStorage.getItem('geminiTimelineUserTurnSelector') ||
-        localStorage.getItem('geminiTimelineUserTurnSelectorAuto') ||
-        ''
-      );
+      return localStorage.getItem(configuredKey) || localStorage.getItem(autoDetectedKey) || '';
     } catch {
       return '';
     }
   })();
-  const defaults = [
-    '.user-query-bubble-with-background',
-    '.user-query-bubble-container',
-    '.user-query-container',
-    'user-query-content .user-query-bubble-with-background',
-    'div[aria-label="User message"]',
-    'article[data-author="user"]',
-    'article[data-turn="user"]',
-    '[data-message-author-role="user"]',
-    'div[role="listitem"][data-user="true"]',
-  ];
+  const defaults = provider.turns.user;
   return configured ? [configured, ...defaults.filter((s) => s !== configured)] : defaults;
 }
 
 function getAssistantSelectors(): string[] {
-  return [
-    // Attribute-based roles
-    '[aria-label="Gemini response"]',
-    '[data-message-author-role="assistant"]',
-    '[data-message-author-role="model"]',
-    'article[data-author="assistant"]',
-    'article[data-turn="assistant"]',
-    'article[data-turn="model"]',
-    // Common Gemini containers
-    '.model-response, model-response',
-    '.response-container',
-    'div[role="listitem"]:not([data-user="true"])',
-  ];
+  return getCurrentProvider().turns.assistant;
 }
 
 function dedupeByTextAndOffset(elements: HTMLElement[], firstTurnOffset: number): HTMLElement[] {
@@ -266,7 +249,7 @@ function ensureTurnId(el: Element, index: number): string {
 function readStarredSet(): Set<string> {
   const cid = computeConversationId();
   try {
-    const raw = localStorage.getItem(`geminiTimelineStars:${cid}`);
+    const raw = localStorage.getItem(getProviderLocalStorageKey(getCurrentProvider().id, `geminiTimelineStars:${cid}`));
     if (!raw) return new Set();
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return new Set();
@@ -639,34 +622,27 @@ function isMeaningfulConversationTitle(title: string | null | undefined): title 
     t === 'Gemini' ||
     t === 'Google Gemini' ||
     t === 'Google AI Studio' ||
+    t === 'ChatGPT' ||
     t === 'New chat'
   ) {
     return false;
   }
-  if (t.startsWith('Gemini -') || t.startsWith('Google AI Studio -')) return false;
+  if (
+    t.startsWith('Gemini -') ||
+    t.startsWith('Google AI Studio -') ||
+    t.startsWith('ChatGPT -')
+  ) {
+    return false;
+  }
   return true;
 }
 
 function extractConversationIdFromUrl(): string | null {
-  const appMatch = window.location.pathname.match(/\/app\/([^/?#]+)/);
-  if (appMatch?.[1]) return appMatch[1];
-  const gemMatch = window.location.pathname.match(/\/gem\/[^/]+\/([^/?#]+)/);
-  if (gemMatch?.[1]) return gemMatch[1];
-  return null;
+  return getCurrentProvider().extractConversationIdFromUrl(window.location.href);
 }
 
 function extractConversationIdFromHref(href: string): string | null {
-  if (!href) return null;
-  try {
-    const parsed = new URL(href, window.location.origin);
-    const appMatch = parsed.pathname.match(/\/app\/([^/?#]+)/);
-    if (appMatch?.[1]) return appMatch[1];
-    const gemMatch = parsed.pathname.match(/\/gem\/[^/]+\/([^/?#]+)/);
-    if (gemMatch?.[1]) return gemMatch[1];
-    return null;
-  } catch {
-    return null;
-  }
+  return href ? getCurrentProvider().extractConversationIdFromUrl(href) : null;
 }
 
 function isGemLabel(text: string | null | undefined): boolean {
@@ -689,19 +665,16 @@ function extractTitleFromLinkText(link?: HTMLAnchorElement | null): string | nul
 }
 
 function extractTitleFromConversationElement(conversationEl: HTMLElement): string | null {
+  const provider = getCurrentProvider();
   const scope =
-    (conversationEl.closest('[data-test-id="conversation"]') as HTMLElement) || conversationEl;
-  const bySelector = scope.querySelector(
-    '.gds-label-l, .conversation-title-text, [data-test-id="conversation-title"], h3',
-  );
+    (conversationEl.closest(provider.sidebar.conversation.join(', ')) as HTMLElement) || conversationEl;
+  const bySelector = scope.querySelector(provider.sidebar.title.join(', '));
   const selectorTitle = bySelector?.textContent?.trim();
   if (isMeaningfulConversationTitle(selectorTitle) && !isGemLabel(selectorTitle)) {
     return selectorTitle;
   }
 
-  const link = scope.querySelector(
-    'a[href*="/app/"], a[href*="/gem/"]',
-  ) as HTMLAnchorElement | null;
+  const link = scope.querySelector(provider.sidebar.link.join(', ')) as HTMLAnchorElement | null;
   const ariaTitle = link?.getAttribute('aria-label')?.trim();
   if (isMeaningfulConversationTitle(ariaTitle) && !isGemLabel(ariaTitle)) {
     return ariaTitle;
@@ -736,17 +709,21 @@ function extractTitleFromConversationElement(conversationEl: HTMLElement): strin
 }
 
 function extractTitleFromNativeSidebarByConversationId(conversationId: string): string | null {
+  const provider = getCurrentProvider();
   const escapedConversationId = escapeCssAttributeValue(conversationId);
-  const byJslog = document.querySelector(
-    `[data-test-id="conversation"][jslog*="c_${escapedConversationId}"]`,
-  ) as HTMLElement | null;
+  const byJslog =
+    provider.id === 'gemini'
+      ? (document.querySelector(
+          `[data-test-id="conversation"][jslog*="c_${escapedConversationId}"]`,
+        ) as HTMLElement | null)
+      : null;
   if (byJslog) {
     const title = extractTitleFromConversationElement(byJslog);
     if (title) return title;
   }
 
   const byHrefLink = document.querySelector(
-    `[data-test-id="conversation"] a[href*="${escapedConversationId}"]`,
+    provider.sidebar.link.map((selector) => `${selector}[href*="${escapedConversationId}"]`).join(', '),
   ) as HTMLElement | null;
   if (byHrefLink) {
     const title = extractTitleFromConversationElement(byHrefLink);
@@ -765,6 +742,7 @@ function escapeCssAttributeValue(value: string): string {
 }
 
 function getConversationTitleForExport(): string {
+  const provider = getCurrentProvider();
   // Strategy 1: Get from active conversation in Gemini Voyager Folder UI (most accurate)
   try {
     const activeFolderTitle =
@@ -805,12 +783,15 @@ function getConversationTitleForExport(): string {
 
   // Strategy 3: Try to get from sidebar conversation list (Gemini / AI Studio)
   try {
-    const selectors = [
-      'mat-list-item.mdc-list-item--activated [mat-line]',
-      'mat-list-item[aria-current="page"] [mat-line]',
-      '.conversation-list-item.active .conversation-title',
-      '.active-conversation .title',
-    ];
+    const selectors =
+      provider.id === 'chatgpt'
+        ? ['nav a[aria-current="page"]', 'aside a[aria-current="page"]']
+        : [
+            'mat-list-item.mdc-list-item--activated [mat-line]',
+            'mat-list-item[aria-current="page"] [mat-line]',
+            '.conversation-list-item.active .conversation-title',
+            '.active-conversation .title',
+          ];
 
     for (const selector of selectors) {
       const element = document.querySelector(selector);
@@ -835,15 +816,19 @@ function getConversationTitleForExport(): string {
 }
 
 function findSidebarConversationLinkById(conversationId: string): HTMLAnchorElement | null {
+  const provider = getCurrentProvider();
   const escapedConversationId = escapeCssAttributeValue(conversationId);
-  const byJslog = document.querySelector(
-    `[data-test-id="conversation"][jslog*="c_${escapedConversationId}"] a[href]`,
-  ) as HTMLAnchorElement | null;
+  const byJslog =
+    provider.id === 'gemini'
+      ? (document.querySelector(
+          `[data-test-id="conversation"][jslog*="c_${escapedConversationId}"] a[href]`,
+        ) as HTMLAnchorElement | null)
+      : null;
   if (byJslog) return byJslog;
 
   const links = Array.from(
     document.querySelectorAll<HTMLAnchorElement>(
-      '[data-test-id="conversation"] a[href], a[data-test-id="conversation"][href]',
+      provider.sidebar.link.join(', '),
     ),
   );
   for (const link of links) {
@@ -1599,6 +1584,7 @@ async function performFinalExport(
       url: location.href,
       exportedAt: new Date().toISOString(),
       count: turnsForExport.length,
+      provider: getCurrentProvider().id,
       title: getConversationTitleForExport(),
     };
 
@@ -1877,6 +1863,7 @@ async function handleResponseCopyImageClick(
       url: location.href,
       exportedAt: new Date().toISOString(),
       count: turnsForExport.length,
+      provider: getCurrentProvider().id,
       title: getConversationTitleForExport(),
     };
 

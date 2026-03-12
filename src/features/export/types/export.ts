@@ -1,3 +1,5 @@
+import type { ProviderId } from '@/core/providers';
+
 /**
  * Export feature type definitions
  * Supports multiple export formats with extensible architecture
@@ -24,6 +26,7 @@ export interface ConversationMetadata {
   exportedAt: string;
   title?: string;
   count: number;
+  provider?: ProviderId;
 }
 
 /**
@@ -76,6 +79,7 @@ export interface BaseExportPayload {
   url: string;
   exportedAt: string;
   count: number;
+  provider?: ProviderId;
   /**
    * Optional human-readable conversation title
    * Added in a backward-compatible way for JSON/Markdown exports

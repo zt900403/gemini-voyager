@@ -117,4 +117,32 @@ describe('chatWidth', () => {
     expect(styleText).toContain(`max-width: ${expectedPx}px !important`);
     expect(styleText).toContain(`width: min(100%, ${expectedPx}px) !important`);
   });
+
+  it('injects ChatGPT-specific width rules on chatgpt.com', async () => {
+    Object.defineProperty(window, 'location', {
+      value: {
+        hostname: 'chatgpt.com',
+        pathname: '/c/chat-123',
+        search: '',
+        hash: '',
+        href: 'https://chatgpt.com/c/chat-123',
+        origin: 'https://chatgpt.com',
+      },
+      writable: true,
+    });
+
+    (chrome.storage.sync.get as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+      (_defaults: Record<string, unknown>, callback: (value: Record<string, unknown>) => void) => {
+        callback({ gvChatGPTChatWidth: 82, gvChatGPTChatWidthEnabled: true, gvChatWidthEnabled: false });
+      },
+    );
+
+    const { startChatWidthAdjuster } = await import('../index');
+    startChatWidthAdjuster();
+
+    const styleText = getInjectedStyle().textContent ?? '';
+    expect(styleText).toContain('[data-message-author-role="user"]');
+    expect(styleText).toContain('[data-message-author-role="assistant"]');
+    expect(styleText).toContain('[data-testid="composer"]');
+  });
 });

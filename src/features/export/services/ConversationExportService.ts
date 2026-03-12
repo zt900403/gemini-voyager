@@ -157,6 +157,7 @@ export class ConversationExportService {
       url: metadata.url,
       exportedAt: metadata.exportedAt,
       count: metadata.count,
+      provider: metadata.provider,
       title: metadata.title,
       items: processedItems,
     };
@@ -233,6 +234,7 @@ export class ConversationExportService {
       format: this.REPORT_JSON_FORMAT,
       url: metadata.url,
       exportedAt: metadata.exportedAt,
+      provider: metadata.provider,
       title: metadata.title,
       content: {
         markdown: content.markdown,

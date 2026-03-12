@@ -28,7 +28,8 @@
         "https://gemini.google.com/*",
         "https://business.gemini.google/*",
         "https://aistudio.google.com/*",
-        "https://aistudio.google.cn/*"
+        "https://aistudio.google.cn/*",
+        "https://chatgpt.com/*"
       ],
       "js": ["src/pages/content/index.tsx"],
       "css": ["contentStyle.css"]
@@ -39,6 +40,7 @@
     "https://business.gemini.google/*",
     "https://aistudio.google.com/*",
     "https://aistudio.google.cn/*",
+    "https://chatgpt.com/*",
     "https://*.googleapis.com/*",
     "https://accounts.google.com/*",
     "https://*.googleusercontent.com/*",

@@ -3,6 +3,7 @@
  * Description: Automatically updates the browser tab title to match the current Gemini chat title.
  * Performance: Targeted observer on top-bar-actions + History API interception.
  */
+import { getCurrentProvider } from '@/core/providers';
 
 let lastTitle = '';
 let lastUrl = '';
@@ -13,11 +14,19 @@ let observer: MutationObserver | null = null;
  * Uses targeted MutationObserver + History API interception for best performance.
  */
 export async function startTitleUpdater() {
-  const { gvTabTitleUpdateEnabled } = await chrome.storage.sync.get({
+  const provider = getCurrentProvider();
+  const enabledKey =
+    provider.id === 'chatgpt' ? 'gvChatGPTTabTitleUpdateEnabled' : 'gvTabTitleUpdateEnabled';
+  const result = await chrome.storage.sync.get({
     gvTabTitleUpdateEnabled: true,
+    [enabledKey]: true,
   });
 
-  if (!gvTabTitleUpdateEnabled) return;
+  const isEnabled =
+    typeof result[enabledKey] === 'boolean'
+      ? result[enabledKey] !== false
+      : result.gvTabTitleUpdateEnabled !== false;
+  if (!isEnabled) return;
 
   lastUrl = location.href;
 
@@ -45,17 +54,22 @@ export async function startTitleUpdater() {
   const attachObserver = () => {
     if (observer) observer.disconnect();
 
-    // Target the most specific container: top-bar-actions or conversation-title-container
-    const target =
-      document.querySelector('top-bar-actions') ||
-      document.querySelector('.conversation-title-container') ||
-      document.querySelector('.center-section') ||
-      document.querySelector('header');
+    const targetSelectors = [
+      ...provider.title.selectors,
+      'top-bar-actions',
+      '.conversation-title-container',
+      '.center-section',
+      'header',
+      'main',
+    ];
+    const target = targetSelectors
+      .map((selector) => document.querySelector(selector))
+      .find((element) => !!element);
 
     if (!target) {
       // Container not ready yet, watch for it
       observer = new MutationObserver(() => {
-        if (document.querySelector('top-bar-actions') || document.querySelector('header')) {
+        if (targetSelectors.some((selector) => !!document.querySelector(selector))) {
           attachObserver();
         }
       });
@@ -98,12 +112,13 @@ export async function startTitleUpdater() {
  * Restores default title when not on a conversation page.
  */
 function tryUpdateTitle() {
+  const provider = getCurrentProvider();
   const currentTitle = findChatTitle();
 
   // Restore default title if not on conversation page
   if (!currentTitle) {
-    if (document.title !== 'Google Gemini') {
-      document.title = 'Google Gemini';
+    if (document.title !== provider.title.defaultTitle) {
+      document.title = provider.title.defaultTitle;
       lastTitle = '';
     }
     return;
@@ -111,7 +126,7 @@ function tryUpdateTitle() {
 
   // Update only if title actually changed
   if (currentTitle !== lastTitle) {
-    document.title = `${currentTitle} - Gemini`;
+    document.title = provider.id === 'chatgpt' ? currentTitle : `${currentTitle} - Gemini`;
     lastTitle = currentTitle;
   }
 }
@@ -121,24 +136,24 @@ function tryUpdateTitle() {
  * Returns null if not on a conversation page or title not found.
  */
 function findChatTitle(): string | null {
-  // Only run on conversation pages: /app/<id> or /gem/<name>/<id>
-  // Also support multi-user prefix: /u/0/, /u/1/, etc.
-  if (!/^(?:\/u\/\d+)?\/(?:app|gem\/[a-zA-Z0-9%\-_]+)\/[a-zA-Z0-9%\-_]+/.test(location.pathname)) {
+  const provider = getCurrentProvider();
+  if (!provider.isConversationRoute(location.pathname)) {
     return null;
   }
 
-  // Target the title using the stable data-test-id attribute, with class-based fallbacks
-  const titleEl = document.querySelector(
-    '.conversation-title-container [data-test-id="conversation-title"], ' +
-      'top-bar-actions [data-test-id="conversation-title"], ' +
-      '.top-bar-actions [data-test-id="conversation-title"], ' +
-      '.conversation-title-container .conversation-title.gds-title-m, ' +
-      'top-bar-actions .conversation-title.gds-title-m',
-  );
+  const titleEl = provider.title.selectors
+    .map((selector) => document.querySelector(selector))
+    .find((element) => !!element);
 
   if (titleEl) {
     const text = titleEl.textContent?.trim();
-    if (text && text !== 'New chat' && text !== 'Gemini' && text !== 'Google Gemini') {
+    if (
+      text &&
+      text !== 'New chat' &&
+      text !== 'Gemini' &&
+      text !== 'Google Gemini' &&
+      text !== 'ChatGPT'
+    ) {
       return text;
     }
   }

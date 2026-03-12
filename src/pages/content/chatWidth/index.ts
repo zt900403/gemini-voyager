@@ -1,6 +1,9 @@
 /**
  * Adjusts the chat area width based on user settings (stored as viewport %)
  */
+import { getCurrentProvider } from '@/core/providers';
+import { StorageKeys } from '@/core/types/common';
+import { getProviderStorageKey } from '@/core/utils/providerStorage';
 
 const STYLE_ID = 'gemini-voyager-chat-width';
 const DEFAULT_PERCENT = 70;
@@ -10,6 +13,11 @@ const LEGACY_BASELINE_PX = 1200;
 
 // Selectors based on the export functionality that already works
 function getUserSelectors(): string[] {
+  const provider = getCurrentProvider();
+  if (provider.id === 'chatgpt') {
+    return provider.turns.user;
+  }
+
   return [
     '.user-query-bubble-container',
     '.user-query-container',
@@ -22,6 +30,11 @@ function getUserSelectors(): string[] {
 }
 
 function getAssistantSelectors(): string[] {
+  const provider = getCurrentProvider();
+  if (provider.id === 'chatgpt') {
+    return provider.turns.assistant;
+  }
+
   return [
     'model-response',
     '.model-response',
@@ -36,6 +49,10 @@ function getAssistantSelectors(): string[] {
 }
 
 function getTableSelectors(): string[] {
+  if (getCurrentProvider().id === 'chatgpt') {
+    return ['table', '[data-message-author-role="assistant"] table'];
+  }
+
   return [
     'table-block',
     '.table-block',
@@ -60,6 +77,7 @@ const normalizePercent = (value: number, fallback: number) => {
 };
 
 function applyWidth(widthPercent: number) {
+  const provider = getCurrentProvider();
   const normalizedPercent = normalizePercent(widthPercent, DEFAULT_PERCENT);
   // Use screen width as reference to compute pixel-based max-width.
   // This provides adaptive behavior for split-screen / narrow windows:
@@ -86,6 +104,39 @@ function applyWidth(widthPercent: number) {
 
   // A small gap to account for scrollbars
   const GAP_PX = 10;
+
+  if (provider.id === 'chatgpt') {
+    style.textContent = `
+      ${userRules},
+      ${assistantRules} {
+        max-width: ${widthValue} !important;
+        width: min(100%, ${widthValue}) !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+      }
+
+      ${tableRules} {
+        max-width: 100% !important;
+      }
+
+      main [role="presentation"],
+      main .mx-auto,
+      main .w-full {
+        max-width: none !important;
+      }
+
+      form,
+      form > div,
+      textarea,
+      [data-testid="composer"] {
+        max-width: ${widthValue} !important;
+        width: min(100%, ${widthValue}) !important;
+        margin-left: auto !important;
+        margin-right: auto !important;
+      }
+    `;
+    return;
+  }
 
   style.textContent = `
     /* Remove width constraints from outer containers that contain conversations */
@@ -232,16 +283,19 @@ function removeStyles() {
 const ENABLED_KEY = 'gvChatWidthEnabled';
 
 export function startChatWidthAdjuster() {
+  const provider = getCurrentProvider();
+  const widthKey = getProviderStorageKey(provider.id, StorageKeys.CHAT_WIDTH);
+  const enabledKey = provider.id === 'chatgpt' ? 'gvChatGPTChatWidthEnabled' : ENABLED_KEY;
   let currentWidthPercent = DEFAULT_PERCENT;
   let enabled = false;
 
   // Load initial state
-  chrome.storage?.sync?.get({ geminiChatWidth: DEFAULT_PERCENT, [ENABLED_KEY]: false }, (res) => {
-    const storedWidth = res?.geminiChatWidth;
+  chrome.storage?.sync?.get({ [widthKey]: DEFAULT_PERCENT, [ENABLED_KEY]: false, [enabledKey]: false }, (res) => {
+    const storedWidth = res?.[widthKey];
     const numericStoredWidth = typeof storedWidth === 'number' ? storedWidth : DEFAULT_PERCENT;
     const normalized = normalizePercent(numericStoredWidth, DEFAULT_PERCENT);
     currentWidthPercent = normalized;
-    enabled = res?.[ENABLED_KEY] === true;
+    enabled = provider.id === 'chatgpt' ? res?.[enabledKey] === true : res?.[ENABLED_KEY] === true;
 
     if (enabled) {
       applyWidth(currentWidthPercent);
@@ -249,7 +303,7 @@ export function startChatWidthAdjuster() {
 
     if (typeof storedWidth === 'number' && storedWidth !== normalized) {
       try {
-        chrome.storage?.sync?.set({ geminiChatWidth: normalized });
+        chrome.storage?.sync?.set({ [widthKey]: normalized });
       } catch (e) {
         console.warn('[Gemini Voyager] Failed to migrate chat width to %:', e);
       }
@@ -263,7 +317,16 @@ export function startChatWidthAdjuster() {
   ) => {
     if (area !== 'sync') return;
 
-    if (changes[ENABLED_KEY]) {
+    if (changes[enabledKey]) {
+      enabled = changes[enabledKey].newValue === true;
+      if (enabled) {
+        applyWidth(currentWidthPercent);
+      } else {
+        removeStyles();
+      }
+    }
+
+    if (provider.id !== 'chatgpt' && changes[ENABLED_KEY]) {
       enabled = changes[ENABLED_KEY].newValue === true;
       if (enabled) {
         applyWidth(currentWidthPercent);
@@ -272,8 +335,8 @@ export function startChatWidthAdjuster() {
       }
     }
 
-    if (changes.geminiChatWidth) {
-      const newWidth = changes.geminiChatWidth.newValue;
+    if (changes[widthKey]) {
+      const newWidth = changes[widthKey].newValue;
       if (typeof newWidth === 'number') {
         const normalized = normalizePercent(newWidth, DEFAULT_PERCENT);
         currentWidthPercent = normalized;
@@ -283,7 +346,7 @@ export function startChatWidthAdjuster() {
 
         if (normalized !== newWidth) {
           try {
-            chrome.storage?.sync?.set({ geminiChatWidth: normalized });
+            chrome.storage?.sync?.set({ [widthKey]: normalized });
           } catch (e) {
             console.warn('[Gemini Voyager] Failed to migrate chat width to % on change:', e);
           }

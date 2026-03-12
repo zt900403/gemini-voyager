@@ -1,4 +1,5 @@
 import { StorageKeys } from '@/core/types/common';
+import { getProviderForHostname, isCustomWebsiteHost } from '@/core/providers';
 import { isSafari } from '@/core/utils/browser';
 import {
   hasValidExtensionContext,
@@ -94,26 +95,7 @@ async function isCustomWebsite(): Promise<boolean> {
     const customWebsites = Array.isArray(result?.gvPromptCustomWebsites)
       ? result.gvPromptCustomWebsites
       : [];
-
-    // Normalize current hostname
-    const currentHost = location.hostname.toLowerCase().replace(/^www\./, '');
-
-    console.log('[Gemini Voyager] Checking custom websites:', {
-      currentHost,
-      customWebsites,
-      hostname: location.hostname,
-    });
-
-    const isCustom = customWebsites.some((website: string) => {
-      const normalizedWebsite = website.toLowerCase().replace(/^www\./, '');
-      const matches =
-        currentHost === normalizedWebsite || currentHost.endsWith('.' + normalizedWebsite);
-      console.log('[Gemini Voyager] Comparing:', { currentHost, normalizedWebsite, matches });
-      return matches;
-    });
-
-    console.log('[Gemini Voyager] Is custom website:', isCustom);
-    return isCustom;
+    return isCustomWebsiteHost(location.hostname, customWebsites);
   } catch (e) {
     if (isExtensionContextInvalidatedError(e)) {
       return false;
@@ -137,6 +119,33 @@ async function initializeFeatures(): Promise<void> {
     // Sequential initialization with small delays between features
     // to further reduce simultaneous resource usage
     const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const provider = getProviderForHostname(location.hostname);
+
+    if (provider?.id === 'chatgpt') {
+      console.log('[Gemini Voyager] ChatGPT detected, starting provider-supported features');
+
+      promptManagerInstance = await startPromptManager();
+      await delay(HEAVY_FEATURE_INIT_DELAY);
+
+      folderManagerInstance = await startFolderManager();
+      await delay(HEAVY_FEATURE_INIT_DELAY);
+
+      startTimeline();
+      await delay(HEAVY_FEATURE_INIT_DELAY);
+
+      startChatWidthAdjuster();
+      await delay(LIGHT_FEATURE_INIT_DELAY);
+
+      startTitleUpdater();
+      await delay(LIGHT_FEATURE_INIT_DELAY);
+
+      startContextSync();
+      await delay(LIGHT_FEATURE_INIT_DELAY);
+
+      startExportButton();
+      return;
+    }
 
     // Check if this is a custom website (only prompt manager should be enabled)
     const isCustomSite = await isCustomWebsite();
@@ -391,7 +400,8 @@ function handleVisibilityChange(): void {
       hostname.includes('gemini.google.com') ||
       hostname.includes('business.gemini.google') ||
       hostname.includes('aistudio.google.com') ||
-      hostname.includes('aistudio.google.cn');
+      hostname.includes('aistudio.google.cn') ||
+      hostname.includes('chatgpt.com');
 
     // Initialize KaTeX configuration early to suppress Unicode warnings
     // This must run before any formulas are rendered on the page
@@ -410,10 +420,7 @@ function handleVisibilityChange(): void {
           : [];
         const currentHost = hostname.replace(/^www\./, '');
 
-        const isCustomSite = customWebsites.some((website: string) => {
-          const normalizedWebsite = website.toLowerCase().replace(/^www\./, '');
-          return currentHost === normalizedWebsite || currentHost.endsWith('.' + normalizedWebsite);
-        });
+        const isCustomSite = isCustomWebsiteHost(currentHost, customWebsites);
 
         if (isCustomSite) {
           console.log('[Gemini Voyager] Custom website detected:', hostname);

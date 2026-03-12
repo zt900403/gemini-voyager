@@ -1,14 +1,9 @@
+import { getCurrentProvider } from '@/core/providers';
+
 type ResolveConversationRootOptions = {
   userSelectors: string[];
   doc?: Document;
 };
-
-const CONVERSATION_ROOT_CANDIDATES = [
-  '#chat-history',
-  'infinite-scroller.chat-history',
-  'chat-window-content',
-  'main',
-];
 
 export function filterOutDeepResearchImmersiveNodes<T extends HTMLElement>(elements: T[]): T[] {
   return elements.filter((element) => !element.closest('deep-research-immersive-panel'));
@@ -26,10 +21,11 @@ export function resolveConversationRoot({
   userSelectors,
   doc = document,
 }: ResolveConversationRootOptions): HTMLElement {
+  const conversationRootCandidates = getCurrentProvider().conversationRootCandidates;
   const body = doc.body as HTMLElement;
   let firstCandidate: HTMLElement | null = null;
 
-  for (const selector of CONVERSATION_ROOT_CANDIDATES) {
+  for (const selector of conversationRootCandidates) {
     const candidate = doc.querySelector(selector) as HTMLElement | null;
     if (!candidate) continue;
     if (!firstCandidate) firstCandidate = candidate;
