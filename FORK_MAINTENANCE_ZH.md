@@ -4,9 +4,10 @@
 
 ## 当前基线
 
-- 当前上游基线提交：`5277b71`
-- 当前上游版本号：`1.3.3`
+- 当前上游基线 tag：`v1.3.4`
+- 当前上游版本号：`1.3.4`
 - 本地长期分支：`chatgpt/main`
+- 当前本地维护 tag：`chatgpt-v1.3.4.0`
 
 ## Remote 约定
 
@@ -73,6 +74,41 @@ git switch chatgpt/main
 git merge --ff-only chatgpt/upgrade/v1.3.4
 git tag chatgpt-v1.3.4.0
 git push origin chatgpt/main --tags
+```
+
+## 最短命令清单
+
+下面这组命令是按你当前仓库状态整理的最短路径；上面的“升级上游版本”仍然保留为更通用、可重放的保守流程。
+
+以后如果要从当前基线升级到 `v1.3.5`，默认直接执行下面这组命令即可：
+
+```bash
+git fetch upstream --tags
+git switch chatgpt/main
+git pull --ff-only origin chatgpt/main
+git switch -c chatgpt/upgrade/v1.3.5
+git merge v1.3.5
+bun run typecheck
+bun run test
+bun run lint
+bun run build:chrome
+git switch chatgpt/main
+git merge --ff-only chatgpt/upgrade/v1.3.5
+git tag -a chatgpt-v1.3.5.0 -m "ChatGPT fork baseline on upstream v1.3.5"
+git push -u origin chatgpt/main
+git push origin chatgpt-v1.3.5.0
+```
+
+说明：
+
+- 如果 `git merge v1.3.5` 没冲突，这就是最短路径。
+- 如果有冲突，只在 `chatgpt/upgrade/v1.3.5` 上解决，不要直接在 `chatgpt/main` 上修。
+- 冲突优先处理顺序仍然是：`provider/types/storage` -> `export/context sync/title updater` -> `timeline/folders/chat width` -> `prompt/theme` -> `docs/tests`。
+- 如果升级失败，直接丢弃临时分支即可：
+
+```bash
+git switch chatgpt/main
+git branch -D chatgpt/upgrade/v1.3.5
 ```
 
 ## 提交纪律
