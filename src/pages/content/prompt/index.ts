@@ -13,6 +13,7 @@ import browser from 'webextension-polyfill';
 import { logger } from '@/core/services/LoggerService';
 import { promptStorageService } from '@/core/services/StorageService';
 import { type StorageKey, StorageKeys } from '@/core/types/common';
+import type { PromptItem } from '@/core/types/sync';
 import { isSafari, shouldShowSafariUpdateReminder } from '@/core/utils/browser';
 import { isExtensionContextInvalidatedError } from '@/core/utils/extensionContext';
 import { migrateFromLocalStorage } from '@/core/utils/storageMigration';
@@ -30,16 +31,12 @@ import type { TranslationKey } from '@/utils/translations';
 
 import { hasUnreadChangelog, openChangelog, showChangelogModalDirect } from '../changelog/index';
 import { createFolderStorageAdapter } from '../folder/storage/FolderStorageAdapter';
+import {
+  isPromptStorageContextInvalidated,
+  normalizePromptStorageValue,
+} from './promptStorage';
 import { getScrollHintState } from './scrollHint';
 import { applyPromptManagerTheme, watchPromptManagerTheme } from './theme';
-
-type PromptItem = {
-  id: string;
-  text: string;
-  tags: string[];
-  createdAt: number;
-  updatedAt?: number;
-};
 
 type PanelPosition = { top: number; left: number };
 type TriggerPosition = { bottom: number; right: number };
@@ -139,20 +136,29 @@ const normalizeVersionString = (version?: string | null): string | null => {
 async function readStorage<T>(key: StorageKey, fallback: T): Promise<T> {
   const result = await promptStorageService.get<T>(key);
   if (result.success) {
-    return result.data;
+    return normalizePromptStorageValue(key, result.data);
   }
   pmLogger.debug(`Key not found: ${key}, using fallback`);
   return fallback;
 }
 
-async function writeStorage<T>(key: StorageKey, value: T): Promise<void> {
-  const result = await promptStorageService.set(key, value);
+async function writeStorage<T>(key: StorageKey, value: T): Promise<boolean> {
+  const normalizedValue = normalizePromptStorageValue(key, value);
+  const result = await promptStorageService.set(key, normalizedValue);
+  if (result.success) {
+    return true;
+  }
+  if (isPromptStorageContextInvalidated(result.error)) {
+    pmLogger.debug(`Skipping storage write after extension context invalidation: ${key}`);
+    return false;
+  }
   if (!result.success) {
     pmLogger.error(`Failed to write key: ${key}`, {
       error: result.error?.message || 'Unknown error',
       errorDetails: result.error,
     });
   }
+  return false;
 }
 
 async function getLatestVersionCached(): Promise<string | null> {
@@ -939,8 +945,12 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
           });
           yes.addEventListener('click', async (ev) => {
             ev.stopPropagation();
-            items = items.filter((x) => x.id !== it.id);
-            await writeStorage(STORAGE_KEYS.items, items);
+            const nextItems = items.filter((x) => x.id !== it.id);
+            if (!(await writeStorage(STORAGE_KEYS.items, nextItems))) {
+              setNotice('Save failed', 'err');
+              return;
+            }
+            items = nextItems;
             cleanup();
             renderTags();
             renderList();
@@ -1345,10 +1355,21 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
         }
         const target = items.find((x) => x.id === editingId);
         if (target) {
-          target.text = text;
-          target.tags = tags;
-          target.updatedAt = Date.now();
-          await writeStorage(STORAGE_KEYS.items, items);
+          const nextItems = items.map((item) =>
+            item.id === editingId
+              ? {
+                  ...item,
+                  text,
+                  tags,
+                  updatedAt: Date.now(),
+                }
+              : item,
+          );
+          if (!(await writeStorage(STORAGE_KEYS.items, nextItems))) {
+            setInlineHint('Save failed', 'err');
+            return;
+          }
+          items = nextItems;
           setNotice(i18n.t('pm_saved') || 'Saved', 'ok');
         }
         editingId = null;
@@ -1360,8 +1381,12 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
           return;
         }
         const it: PromptItem = { id: uid(), text, tags, createdAt: Date.now() };
-        items = [it, ...items];
-        await writeStorage(STORAGE_KEYS.items, items);
+        const nextItems = [it, ...items];
+        if (!(await writeStorage(STORAGE_KEYS.items, nextItems))) {
+          setInlineHint('Save failed', 'err');
+          return;
+        }
+        items = nextItems;
       }
       (addForm.querySelector('.gv-pm-input-text') as HTMLTextAreaElement).value = '';
       (addForm.querySelector('.gv-pm-input-tags') as HTMLInputElement).value = '';
@@ -1538,7 +1563,7 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
         const valid: PromptItem[] = [];
         const seen = new Set<string>();
         for (const it of arr) {
-          const itObj = it as Record<string, unknown>;
+          const itObj = it as unknown as Record<string, unknown>;
           const text = String((itObj && itObj.text) || '').trim();
           if (!text) continue;
           const tags = Array.isArray(itObj.tags) ? itObj.tags.map((t: unknown) => String(t)) : [];
@@ -1563,8 +1588,14 @@ export async function startPromptManager(): Promise<{ destroy: () => void }> {
               map.set(k, it);
             }
           }
-          items = Array.from(map.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-          await writeStorage(STORAGE_KEYS.items, items);
+          const nextItems = Array.from(map.values()).sort(
+            (a, b) => (b.createdAt || 0) - (a.createdAt || 0),
+          );
+          if (!(await writeStorage(STORAGE_KEYS.items, nextItems))) {
+            setNotice('Save failed', 'err');
+            return;
+          }
+          items = nextItems;
           setNotice(
             (i18n.t('pm_import_success') || 'Imported').replace('{count}', String(valid.length)),
             'ok',
