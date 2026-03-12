@@ -6611,3 +6611,29 @@ body.gv-rtl .timeline-preview-index {
   text-align: right;
   justify-content: flex-end;
 }
+html.dark,
+[data-theme='dark'],
+[data-color-scheme='dark'],
+body.dark {
+  --timeline-dot-color: #475569;
+  --timeline-dot-active-color: oklch(0.7 0.16 155);
+  --timeline-star-color: #f59e0b;
+  --timeline-tooltip-bg: #0b1220;
+  --timeline-tooltip-text: #e2e8f0;
+  --timeline-tooltip-border: #1f2937;
+  --timeline-bar-bg: rgba(2, 6, 23, 0.75);
+}
+
+html.light,
+[data-theme='light'],
+[data-color-scheme='light'],
+body.light {
+  --timeline-dot-color: #94a3b8;
+  --timeline-dot-active-color: oklch(0.55 0.17 155);
+  --timeline-star-color: #f59e0b;
+  --timeline-tooltip-bg: #ffffff;
+  --timeline-tooltip-text: #0f172a;
+  --timeline-tooltip-border: #e2e8f0;
+  --timeline-bar-bg: rgba(248, 250, 252, 0.88);
+}
+

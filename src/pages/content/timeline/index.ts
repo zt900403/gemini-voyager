@@ -1,9 +1,9 @@
+import { getCurrentProvider } from '@/core/providers';
+
 import { TimelineManager } from './manager';
 
-function isGeminiConversationRoute(pathname = location.pathname): boolean {
-  // Support account-scoped routes like /u/1/app or /u/0/gem/
-  // Matches: "/app", "/gem/", "/u/<num>/app", "/u/<num>/gem/"
-  return /^\/(?:u\/\d+\/)?(app|gem)(\/|$)/.test(pathname);
+function isProviderConversationRoute(pathname = location.pathname): boolean {
+  return getCurrentProvider().isConversationRoute(pathname);
 }
 
 type HistoryStateArgs = Parameters<History['pushState']>;
@@ -66,7 +66,7 @@ function handleUrlChange(): void {
     urlChangeTimer = null;
   }
 
-  if (isGeminiConversationRoute()) {
+  if (isProviderConversationRoute()) {
     // Add delay to allow DOM to update after SPA navigation
     console.log('[Timeline] URL changed to conversation route, scheduling initialization');
     urlChangeTimer = window.setTimeout(() => {
@@ -184,7 +184,7 @@ function cleanup(): void {
 export function startTimeline(): void {
   const setup = (): void => {
     attachRouteListenersOnce();
-    if (isGeminiConversationRoute() && !timelineManagerInstance) {
+    if (isProviderConversationRoute() && !timelineManagerInstance) {
       initializeTimeline();
     }
   };

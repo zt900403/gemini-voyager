@@ -1,6 +1,9 @@
 import { keyboardShortcutService } from '@/core/services/KeyboardShortcutService';
+import { getCurrentProvider } from '@/core/providers';
 import { StorageKeys } from '@/core/types/common';
+import { isExtensionContextInvalidatedError } from '@/core/utils/extensionContext';
 import { GV_RTL_CLASS, applyRTLClass } from '@/core/utils/rtl';
+import { getProviderLocalStorageKey, getProviderStorageKey } from '@/core/utils/providerStorage';
 
 import { getTranslationSync, initI18n } from '../../../utils/i18n';
 import { eventBus } from './EventBus';
@@ -180,6 +183,7 @@ export class TimelineManager {
   private isNavigating: boolean = false;
   private previewPanel: TimelinePreviewPanel | null = null;
   private rtl = false;
+  private stabilizationTimers: number[] = [];
 
   async init(): Promise<void> {
     await initI18n();
@@ -195,18 +199,27 @@ export class TimelineManager {
     this.loadCollapsedMarkers();
     // Ensure initial render even when Gemini DOM is already stable (no mutations after observer attaches)
     this.recalculateAndRenderMarkers();
+    this.scheduleInitialStabilization();
     // Handle URL hash for starred message navigation
     this.handleStarredMessageNavigation();
     // Initialize keyboard shortcuts
     await this.initKeyboardShortcuts();
     try {
       const g = globalThis as ExtGlobal;
+      const provider = getCurrentProvider();
+      const scrollModeKey = getProviderStorageKey(provider.id, StorageKeys.TIMELINE_SCROLL_MODE);
+      const hideContainerKey = getProviderStorageKey(
+        provider.id,
+        StorageKeys.TIMELINE_HIDE_CONTAINER,
+      );
+      const draggableKey = getProviderStorageKey(provider.id, StorageKeys.TIMELINE_DRAGGABLE);
+      const positionKey = getProviderStorageKey(provider.id, StorageKeys.TIMELINE_POSITION);
       const defaults = {
-        geminiTimelineScrollMode: 'flow',
-        geminiTimelineHideContainer: false,
-        geminiTimelineDraggable: false,
+        [scrollModeKey]: 'flow',
+        [hideContainerKey]: false,
+        [draggableKey]: false,
         geminiTimelineMarkerLevel: false,
-        geminiTimelinePosition: null,
+        [positionKey]: null,
         [StorageKeys.LANGUAGE]: null,
       };
 
@@ -240,20 +253,20 @@ export class TimelineManager {
         });
       } else {
         // No extension storage available, try to load critical fallback from localStorage
-        const saved = localStorage.getItem('geminiTimelineScrollMode');
-        if (saved === 'flow' || saved === 'jump') res = { geminiTimelineScrollMode: saved };
+        const saved = localStorage.getItem(getProviderLocalStorageKey(provider.id, 'geminiTimelineScrollMode'));
+        if (saved === 'flow' || saved === 'jump') res = { [scrollModeKey]: saved };
       }
 
-      const m = res?.geminiTimelineScrollMode;
+      const m = res?.[scrollModeKey];
       if (m === 'flow' || m === 'jump') this.scrollMode = m;
-      this.hideContainer = !!res?.geminiTimelineHideContainer;
+      this.hideContainer = !!res?.[hideContainerKey];
       this.applyContainerVisibility();
-      this.toggleDraggable(!!res?.geminiTimelineDraggable);
+      this.toggleDraggable(!!res?.[draggableKey]);
       this.toggleMarkerLevel(!!res?.geminiTimelineMarkerLevel);
       this.rtl = applyRTLClass(res?.[StorageKeys.LANGUAGE] as string | null | undefined);
 
       // Load position with auto-migration from v1 to v2
-      const position = res?.geminiTimelinePosition as
+      const position = res?.[positionKey] as
         | {
             version?: number;
             topPercent?: number;
@@ -288,7 +301,7 @@ export class TimelineManager {
             leftPercent: (position.left / viewportWidth) * 100,
           };
           (g.chrome?.storage?.sync || g.browser?.storage?.sync)?.set?.({
-            geminiTimelinePosition: migratedPosition,
+            [positionKey]: migratedPosition,
           });
         }
       }
@@ -300,21 +313,21 @@ export class TimelineManager {
         if (onChanged) {
           onChanged.addListener((changes: Record<string, { newValue: unknown }>, area: string) => {
             if (area !== 'sync') return;
-            if (changes?.geminiTimelineScrollMode) {
-              const n = changes.geminiTimelineScrollMode.newValue;
+            if (changes?.[scrollModeKey]) {
+              const n = changes[scrollModeKey].newValue;
               if (n === 'flow' || n === 'jump') this.scrollMode = n;
             }
-            if (changes?.geminiTimelineHideContainer) {
-              this.hideContainer = !!changes.geminiTimelineHideContainer.newValue;
+            if (changes?.[hideContainerKey]) {
+              this.hideContainer = !!changes[hideContainerKey].newValue;
               this.applyContainerVisibility();
             }
-            if (changes?.geminiTimelineDraggable) {
-              this.toggleDraggable(!!changes.geminiTimelineDraggable.newValue);
+            if (changes?.[draggableKey]) {
+              this.toggleDraggable(!!changes[draggableKey].newValue);
             }
             if (changes?.geminiTimelineMarkerLevel) {
               this.toggleMarkerLevel(!!changes.geminiTimelineMarkerLevel.newValue);
             }
-            if (changes?.geminiTimelinePosition && !changes.geminiTimelinePosition.newValue) {
+            if (changes?.[positionKey] && !changes[positionKey].newValue) {
               if (this.ui.timelineBar) {
                 this.ui.timelineBar.style.top = '';
                 this.ui.timelineBar.style.left = '';
@@ -373,15 +386,20 @@ export class TimelineManager {
   }
 
   private computeConversationId(): string {
+    const provider = getCurrentProvider();
     const raw = `${location.host}${location.pathname}${location.search}`;
-    return `gemini:${hashString(raw)}`;
+    return `${provider.id}:${hashString(raw)}`;
   }
 
   /**
    * DRY helper: Get storage key for starred messages
    */
   private getStarsStorageKey(): string | null {
-    return this.conversationId ? `geminiTimelineStars:${this.conversationId}` : null;
+    if (!this.conversationId) return null;
+    return getProviderLocalStorageKey(
+      getCurrentProvider().id,
+      `geminiTimelineStars:${this.conversationId}`,
+    );
   }
 
   /**
@@ -467,6 +485,7 @@ export class TimelineManager {
   }
 
   private getConversationTitle(): string {
+    const provider = getCurrentProvider();
     const getText = (el: Element | null | undefined): string | null => {
       const text = el?.textContent?.trim();
       return text && text.length > 0 ? text : null;
@@ -493,6 +512,7 @@ export class TimelineManager {
         title !== 'Gemini' &&
         title !== 'Google Gemini' &&
         title !== 'Google AI Studio' &&
+        title !== 'ChatGPT' &&
         !title.startsWith('Gemini -') &&
         !title.startsWith('Google AI Studio -') &&
         title.length > 0
@@ -505,14 +525,15 @@ export class TimelineManager {
     // Look for the active conversation in the sidebar
     try {
       // Gemini uses various selectors for conversation titles
-      const selectors = [
-        // Gemini sidebar active conversation
-        'mat-list-item.mdc-list-item--activated [mat-line]',
-        'mat-list-item[aria-current="page"] [mat-line]',
-        // AI Studio active conversation
-        '.conversation-list-item.active .conversation-title',
-        '.active-conversation .title',
-      ];
+      const selectors =
+        provider.id === 'chatgpt'
+          ? ['nav a[aria-current="page"]', 'aside a[aria-current="page"]']
+          : [
+              'mat-list-item.mdc-list-item--activated [mat-line]',
+              'mat-list-item[aria-current="page"] [mat-line]',
+              '.conversation-list-item.active .conversation-title',
+              '.active-conversation .title',
+            ];
 
       for (const selector of selectors) {
         const element = document.querySelector(selector);
@@ -536,10 +557,9 @@ export class TimelineManager {
 
     // Strategy 5: Extract from URL if it contains conversation ID
     try {
-      const urlPath = window.location.pathname;
-      const match = urlPath.match(/\/app\/([a-zA-Z0-9_-]+)/);
-      if (match && match[1]) {
-        return `Conversation ${match[1].slice(0, 8)}...`;
+      const conversationId = provider.extractConversationIdFromUrl(window.location.href);
+      if (conversationId) {
+        return `Conversation ${conversationId.slice(0, 8)}...`;
       }
     } catch (error) {
       console.debug('[Timeline] Failed to extract from URL:', error);
@@ -615,27 +635,17 @@ export class TimelineManager {
   }
 
   private async findCriticalElements(): Promise<boolean> {
+    const provider = getCurrentProvider();
     const configured = this.getConfiguredUserTurnSelector();
     let userOverride = '';
     let autoDetected = '';
+    const userKey = getProviderLocalStorageKey(provider.id, 'geminiTimelineUserTurnSelector');
+    const autoKey = getProviderLocalStorageKey(provider.id, 'geminiTimelineUserTurnSelectorAuto');
     try {
-      userOverride = localStorage.getItem('geminiTimelineUserTurnSelector') || '';
-      autoDetected = localStorage.getItem('geminiTimelineUserTurnSelectorAuto') || '';
+      userOverride = localStorage.getItem(userKey) || '';
+      autoDetected = localStorage.getItem(autoKey) || '';
     } catch {}
-    const defaultCandidates = [
-      // Angular-based Gemini UI user bubble (primary)
-      '.user-query-bubble-with-background',
-      // Angular containers (fallbacks if bubble selector changes)
-      '.user-query-bubble-container',
-      '.user-query-container',
-      'user-query-content .user-query-bubble-with-background',
-      // Attribute-based fallbacks for other Gemini variants
-      'div[aria-label="User message"]',
-      'article[data-author="user"]',
-      'article[data-turn="user"]',
-      '[data-message-author-role="user"]',
-      'div[role="listitem"][data-user="true"]',
-    ];
+    const defaultCandidates = provider.turns.user;
     // Compatibility strategy:
     // - Keep explicit user override as highest priority.
     // - Prefer built-in defaults over auto-detected cache, so stale auto cache can self-heal after refresh.
@@ -676,13 +686,13 @@ export class TimelineManager {
       // Persist auto-detected selector for future sessions when no explicit user override exists
       if (!userOverride && matchedSelector) {
         try {
-          localStorage.setItem('geminiTimelineUserTurnSelectorAuto', matchedSelector);
+          localStorage.setItem(autoKey, matchedSelector);
         } catch {}
       }
       // If a stale user override failed (matchedSelector differs), clear it so we don't keep retrying it
       if (userOverride && matchedSelector && matchedSelector !== userOverride) {
         try {
-          localStorage.removeItem('geminiTimelineUserTurnSelector');
+          localStorage.removeItem(userKey);
         } catch {}
       }
     }
@@ -704,10 +714,13 @@ export class TimelineManager {
   }
 
   private getConfiguredUserTurnSelector(): string {
+    const provider = getCurrentProvider();
+    const userKey = getProviderLocalStorageKey(provider.id, 'geminiTimelineUserTurnSelector');
+    const autoKey = getProviderLocalStorageKey(provider.id, 'geminiTimelineUserTurnSelectorAuto');
     try {
-      const user = localStorage.getItem('geminiTimelineUserTurnSelector');
+      const user = localStorage.getItem(userKey);
       if (user && typeof user === 'string') return user;
-      const auto = localStorage.getItem('geminiTimelineUserTurnSelectorAuto');
+      const auto = localStorage.getItem(autoKey);
       return auto && typeof auto === 'string' ? auto : '';
     } catch {
       return '';
@@ -1165,23 +1178,31 @@ export class TimelineManager {
 
     const firstTurnOffset = (allEls[0] as HTMLElement).offsetTop;
     allEls = this.dedupeByTextAndOffset(allEls, firstTurnOffset);
-    this.markerTops = this.computeElementTopsInScrollContainer(allEls);
+
+    const computedMarkerTops = this.computeElementTopsInScrollContainer(allEls);
+    this.markerTops =
+      computedMarkerTops.length === allEls.length
+        ? computedMarkerTops
+        : allEls.map((element) => element.offsetTop);
+
+    const firstMarkerTop = this.markerTops[0] ?? firstTurnOffset;
 
     let contentSpan: number;
     if (allEls.length < 2) {
       contentSpan = 1;
     } else {
-      const lastTurnOffset = (allEls[allEls.length - 1] as HTMLElement).offsetTop;
-      contentSpan = lastTurnOffset - firstTurnOffset;
+      const lastMarkerTop = this.markerTops[allEls.length - 1] ?? firstMarkerTop;
+      contentSpan = lastMarkerTop - firstMarkerTop;
     }
     if (contentSpan <= 0) contentSpan = 1;
-    this.firstUserTurnOffset = firstTurnOffset;
+    this.firstUserTurnOffset = firstMarkerTop;
     this.contentSpanPx = contentSpan;
 
     this.markerMap.clear();
     this.markers = Array.from(allEls).map((el, idx) => {
       const element = el as HTMLElement;
-      const offsetFromStart = element.offsetTop - firstTurnOffset;
+      const markerTop = this.markerTops[idx] ?? element.offsetTop;
+      const offsetFromStart = markerTop - firstMarkerTop;
       let n = offsetFromStart / contentSpan;
       n = Math.max(0, Math.min(1, n));
       const id = this.ensureTurnId(element, idx);
@@ -1210,6 +1231,25 @@ export class TimelineManager {
       this.markers.map((m, i) => ({ id: m.id, summary: m.summary, index: i, starred: m.starred })),
     );
   };
+
+  private scheduleInitialStabilization(): void {
+    if (getCurrentProvider().id !== 'chatgpt') return;
+
+    const rerender = () => {
+      const refreshed = this.refreshCriticalElementsFromDocument();
+      if (!refreshed) return;
+      this.recalculateAndRenderMarkers();
+      this.scheduleScrollSync();
+    };
+
+    [90, 260, 700].forEach((delay) => {
+      const timer = window.setTimeout(() => {
+        this.stabilizationTimers = this.stabilizationTimers.filter((id) => id !== timer);
+        rerender();
+      }, delay);
+      this.stabilizationTimers.push(timer);
+    });
+  }
 
   private setupObservers(): void {
     this.mutationObserver = new MutationObserver(() => {
@@ -2230,10 +2270,14 @@ export class TimelineManager {
     };
 
     const g = globalThis as ExtGlobal;
+    const positionKey = getProviderStorageKey(
+      getCurrentProvider().id,
+      StorageKeys.TIMELINE_POSITION,
+    );
     if (g.chrome?.storage?.sync?.set) {
-      g.chrome.storage.sync.set({ geminiTimelinePosition: position });
+      g.chrome.storage.sync.set({ [positionKey]: position });
     } else if (g.browser?.storage?.sync?.set) {
-      g.browser.storage.sync.set({ geminiTimelinePosition: position });
+      g.browser.storage.sync.set({ [positionKey]: position });
     }
   }
 
@@ -2279,6 +2323,10 @@ export class TimelineManager {
     if (!this.ui.timelineBar) return;
 
     const g = globalThis as ExtGlobal;
+    const positionKey = getProviderStorageKey(
+      getCurrentProvider().id,
+      StorageKeys.TIMELINE_POSITION,
+    );
     if (!g.chrome?.storage?.sync && !g.browser?.storage?.sync) return;
 
     let res: Record<string, unknown> | null = null;
@@ -2286,9 +2334,16 @@ export class TimelineManager {
       res = await new Promise((resolve) => {
         if (g.chrome?.storage?.sync?.get) {
           g.chrome.storage.sync.get(
-            { geminiTimelinePosition: null },
+            { [positionKey]: null },
             (items: Record<string, unknown>) => {
               if (g.chrome.runtime?.lastError) {
+                if (
+                  isExtensionContextInvalidatedError(g.chrome.runtime.lastError.message) ||
+                  isExtensionContextInvalidatedError(g.chrome.runtime.lastError)
+                ) {
+                  resolve(null);
+                  return;
+                }
                 console.error(
                   `[Timeline] chrome.storage.get failed: ${g.chrome.runtime.lastError.message}`,
                 );
@@ -2300,20 +2355,25 @@ export class TimelineManager {
           );
         } else {
           g.browser?.storage?.sync
-            ?.get({ geminiTimelinePosition: null })
+            ?.get({ [positionKey]: null })
             .then(resolve)
             .catch((error: Error) => {
+              if (isExtensionContextInvalidatedError(error)) {
+                resolve(null);
+                return;
+              }
               console.error(`[Timeline] browser.storage.get failed: ${error.message}`);
               resolve(null);
             });
         }
       });
     } catch (error) {
+      if (isExtensionContextInvalidatedError(error)) return;
       console.error('[Timeline] reapplyPosition storage access failed:', error);
       return;
     }
 
-    const position = res?.geminiTimelinePosition as
+    const position = res?.[positionKey] as
       | { version?: number; topPercent?: number; leftPercent?: number; top?: number; left?: number }
       | undefined;
     if (!position) return;
@@ -2433,7 +2493,11 @@ export class TimelineManager {
   // ===== Marker Level Methods =====
 
   private getLevelsStorageKey(): string | null {
-    return this.conversationId ? `geminiTimelineLevels:${this.conversationId}` : null;
+    if (!this.conversationId) return null;
+    return getProviderLocalStorageKey(
+      getCurrentProvider().id,
+      `geminiTimelineLevels:${this.conversationId}`,
+    );
   }
 
   /* Load marker levels from localStorage */
@@ -2475,7 +2539,11 @@ export class TimelineManager {
   // ===== Collapsed Markers Methods =====
 
   private getCollapsedStorageKey(): string | null {
-    return this.conversationId ? `geminiTimelineCollapsed:${this.conversationId}` : null;
+    if (!this.conversationId) return null;
+    return getProviderLocalStorageKey(
+      getCurrentProvider().id,
+      `geminiTimelineCollapsed:${this.conversationId}`,
+    );
   }
 
   private loadCollapsedMarkers(): void {
@@ -3188,6 +3256,8 @@ export class TimelineManager {
     try {
       this.intersectionObserver?.disconnect();
     } catch {}
+    this.stabilizationTimers.forEach((timer) => window.clearTimeout(timer));
+    this.stabilizationTimers = [];
     this.visibleUserTurns.clear();
     if (this.ui.timelineBar && this.onTimelineBarClick) {
       try {
