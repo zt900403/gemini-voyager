@@ -36,6 +36,7 @@ export const StorageKeys = {
   // Folder system
   FOLDER_DATA: 'gvFolderData',
   FOLDER_DATA_AISTUDIO: 'gvFolderDataAIStudio',
+  FOLDER_DATA_CHATGPT: 'gvFolderDataChatGPT',
 
   // Timeline
   TIMELINE_SCROLL_MODE: 'geminiTimelineScrollMode',
@@ -44,9 +45,15 @@ export const StorageKeys = {
   TIMELINE_POSITION: 'geminiTimelinePosition',
   TIMELINE_STARRED_MESSAGES: 'geminiTimelineStarredMessages',
   TIMELINE_SHORTCUTS: 'geminiTimelineShortcuts',
+  TIMELINE_SCROLL_MODE_CHATGPT: 'gvChatGPTTimelineScrollMode',
+  TIMELINE_HIDE_CONTAINER_CHATGPT: 'gvChatGPTTimelineHideContainer',
+  TIMELINE_DRAGGABLE_CHATGPT: 'gvChatGPTTimelineDraggable',
+  TIMELINE_POSITION_CHATGPT: 'gvChatGPTTimelinePosition',
+  TIMELINE_STARRED_MESSAGES_CHATGPT: 'gvChatGPTTimelineStarredMessages',
 
   // UI customization
   CHAT_WIDTH: 'geminiChatWidth',
+  CHAT_WIDTH_CHATGPT: 'gvChatGPTChatWidth',
 
   // Prompt Manager
   PROMPT_ITEMS: 'gvPromptItems',
